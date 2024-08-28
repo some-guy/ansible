@@ -1,0 +1,110 @@
+---
+# tasks file for k8s
+
+- name: reconfig nm
+  copy: 
+    src: disable.conf
+    dest: /etc/NetworkManager/conf.d
+
+- name: reload network manager
+  ansible.builtin.systemd_service:
+    name: NetworkManager
+    state: reloaded
+
+- name: install k8s/crio repo
+  copy: 
+    src: "{{item}}.repo"
+    dest: /etc/yum.repos.d
+  with_items:
+    - k8s
+    - crio
+
+- name: Install pre-reqs
+  ansible.builtin.package:
+    name:
+      - conntrack
+      - ebtables
+      - ethtool
+      - iptables
+      - socat
+      - wget
+    state: present
+
+- name: Install packages
+  ansible.builtin.package:
+    name:
+      - cri-o
+      - kubeadm
+      - kubectl
+      - kubelet
+    state: present
+
+- name: Start service crio
+  ansible.builtin.service:
+    name: crio
+    state: started
+
+- name: Enable service kubelet
+  ansible.builtin.systemd_service:
+    name: kubelet
+    enabled: true
+
+- name: load overlay/bf_netfilter
+  community.general.modprobe:
+    name: "{{item}}"
+    state: present
+    persistent: present
+  with_items:
+    - br_netfilter
+    - overlay
+
+- name: configure kernel
+  ansible.posix.sysctl:
+    name: "{{item}}"
+    value: '1'
+    sysctl_set: true
+    state: present
+    reload: true
+  with_items:
+    - net.ipv4.ip_forward
+    - net.bridge.bridge-nf-call-iptables
+
+- name: init cluster
+  ansible.builtin.command: kubeadm init --pod-network-cidr=10.244.0.0/17 --service-cidr  10.244.128.0/17
+  register: initOut
+  when: ansible_host == "k8s-control"
+
+
+- name: copy flannel/dnsutils
+  copy: 
+    src: "{{item}}"
+    dest: /root
+  with_items:
+    - kube-flannel.yml
+    - dnsutils.yaml
+    - helm
+
+- name: install flannel
+  environment:
+     KUBECONFIG: /etc/kubernetes/admin.conf
+  ansible.builtin.shell: kubectl apply -f /root/kube-flannel.yml
+  when: ansible_host == "k8s-control"
+
+- name: get join command
+  ansible.builtin.command: ssh k8s-control sudo kubeadm token create --print-join-command
+  delegate_to: localhost
+  register: joinCmd
+  tags: join
+  become: false
+  when: ansible_host != "k8s-control"
+
+- name: run join commands
+  ansible.builtin.command: "{{joinCmd.stdout}}"
+  when: ansible_host != "k8s-control"
+  tags: join
+
+- name: add kubeconfig to root .bash_profile
+  ansible.builtin.lineinfile:
+    path: /root/.bash_profile
+    line: export KUBECONFIG=/etc/kubernetes/admin.conf
+  when: ansible_host == "k8s-control"

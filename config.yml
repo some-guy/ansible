@@ -1,0 +1,16 @@
+- name: gather facts
+  hosts: localhost
+  gather_facts: true
+
+  pre_tasks:
+  - name: debug group
+    debug: 
+      var: group
+
+- name: run on k8s
+  hosts: k8s-*
+  gather_facts: true
+  become: true
+  roles:
+    - k8s
+
