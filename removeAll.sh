@@ -1,4 +1,5 @@
 #!/bin/bash
+# run this to remove  existing k8s hosts
 set -e
 set -x
 
